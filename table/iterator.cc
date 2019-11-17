@@ -22,6 +22,10 @@ Iterator::~Iterator() {
     }
   }
 }
+uint32_t Iterator::offset () const {
+  assert(false);
+  return 0;
+}
 
 void Iterator::RegisterCleanup(CleanupFunction func, void* arg1, void* arg2) {
   assert(func != nullptr);

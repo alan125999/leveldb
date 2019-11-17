@@ -8,6 +8,7 @@
 #include "leveldb/env.h"
 #include "leveldb/iterator.h"
 #include "util/coding.h"
+#include <iostream>
 
 namespace leveldb {
 
@@ -138,6 +139,47 @@ bool MemTable::Get(const LookupKey& key, std::string* value, Status* s) {
           return true;
       }
     }
+  }
+  return false;
+}
+
+bool MemTable::Sanitize(const LookupKey& key, Status* s) {
+  Slice memkey = key.memtable_key();
+  Table::Iterator iter(&table_);
+  iter.Seek(memkey.data());
+  while (iter.Valid()) {
+    // entry format is:
+    //    klength  varint32
+    //    userkey  char[klength]
+    //    tag      uint64
+    //    vlength  varint32
+    //    value    char[vlength]
+    // Check that it belongs to same user key.  We do not check the
+    // sequence number since the Seek() call above should have skipped
+    // all entries with overly large sequence numbers.
+    const char* entry = iter.key();
+    uint32_t key_length;
+    const char* key_ptr = GetVarint32Ptr(entry, entry+5, &key_length);
+    if (comparator_.comparator.user_comparator()->Compare(
+            Slice(key_ptr, key_length - 8),
+            key.user_key()) == 0) {
+      // Correct user key
+      const uint64_t tag = DecodeFixed64(key_ptr + key_length - 8);
+      switch (static_cast<ValueType>(tag & 0xff)) {
+        case kTypeValue: {
+          ((char *)key_ptr)[key_length - 8] = '\x00';
+          Slice v = GetLengthPrefixedSlice(key_ptr + key_length);
+          memset((void *)v.data(), 0, v.size());
+          // std::cout << "Found in memtable: " << *value << std::endl;
+          return true;
+        }
+        case kTypeDeletion:
+          // std::cout << "Found deletion in memtable" << std::endl;
+          *s = Status::NotFound(Slice());
+          return true;
+      }
+    }
+    iter.Seek(memkey.data());
   }
   return false;
 }

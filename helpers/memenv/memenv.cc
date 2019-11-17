@@ -101,6 +101,10 @@ class FileState {
     *result = Slice(scratch, n);
     return Status::OK();
   }
+  Status Write(uint64_t offset, size_t n, Slice* source) const {
+    printf("%s", "[memenv->FileState] Write method is not implemented.");
+    return Status::OK();
+  }
 
   Status Append(const Slice& data) {
     const char* src = data.data();
@@ -200,6 +204,10 @@ class RandomAccessFileImpl : public RandomAccessFile {
   virtual Status Read(uint64_t offset, size_t n, Slice* result,
                       char* scratch) const {
     return file_->Read(offset, n, result, scratch);
+  }
+
+  virtual Status Write(uint64_t offset, size_t n, Slice* source) const {
+    return file_->Write(offset, n, source);
   }
 
  private:

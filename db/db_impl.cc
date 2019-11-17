@@ -12,6 +12,7 @@
 #include <set>
 #include <string>
 #include <vector>
+#include <iostream>
 
 #include "db/builder.h"
 #include "db/db_iter.h"
@@ -1164,6 +1165,56 @@ Status DBImpl::Get(const ReadOptions& options,
   return s;
 }
 
+Status DBImpl::Sanitize(const ReadOptions& options,
+                   const Slice& key) {
+  Status s;
+  MutexLock l(&mutex_);
+  SequenceNumber snapshot;
+  if (options.snapshot != nullptr) {
+    snapshot =
+        static_cast<const SnapshotImpl*>(options.snapshot)->sequence_number();
+  } else {
+    snapshot = versions_->LastSequence();
+  }
+
+  MemTable* mem = mem_;
+  MemTable* imm = imm_;
+  Version* current = versions_->current();
+  mem->Ref();
+  if (imm != nullptr) imm->Ref();
+  current->Ref();
+
+  bool have_stat_update = false;
+  Version::GetStats stats;
+
+  // Unlock while reading from files and memtables
+  {
+    mutex_.Unlock();
+    // First look in the memtable, then in the immutable memtable (if any).
+    LookupKey lkey(key, snapshot);
+    // std::cout << std::endl << "Seeking in memtable:" << std::endl;
+    if (mem->Sanitize(lkey, &s)) {
+      // Done
+    } 
+    if (imm != nullptr && imm->Sanitize(lkey, &s)) {
+      // Done
+      // std::cout << "Found in immutable memtable: " << *value << std::endl;
+    }
+    s = current->Sanitize(options, lkey, &stats);
+    have_stat_update = false;
+    // if(s.ok()) std::cout << "Found in sstable: " << *value << std::endl;
+    mutex_.Lock();
+  }
+
+  if (have_stat_update && current->UpdateStats(stats)) {
+    MaybeScheduleCompaction();
+  }
+  mem->Unref();
+  if (imm != nullptr) imm->Unref();
+  current->Unref();
+  return s;
+}
+
 Iterator* DBImpl::NewIterator(const ReadOptions& options) {
   SequenceNumber latest_snapshot;
   uint32_t seed;
@@ -1200,6 +1251,10 @@ Status DBImpl::Put(const WriteOptions& o, const Slice& key, const Slice& val) {
 
 Status DBImpl::Delete(const WriteOptions& options, const Slice& key) {
   return DB::Delete(options, key);
+}
+
+Status DBImpl::SecureDelete(const WriteOptions& options, const Slice& key) {
+  return DB::SecureDelete(options, key);
 }
 
 Status DBImpl::Write(const WriteOptions& options, WriteBatch* my_batch) {
@@ -1492,6 +1547,12 @@ Status DB::Put(const WriteOptions& opt, const Slice& key, const Slice& value) {
 }
 
 Status DB::Delete(const WriteOptions& opt, const Slice& key) {
+  WriteBatch batch;
+  batch.Delete(key);
+  return Write(opt, &batch);
+}
+
+Status DB::SecureDelete(const WriteOptions& opt, const Slice& key) {
   WriteBatch batch;
   batch.Delete(key);
   return Write(opt, &batch);

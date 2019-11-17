@@ -8,6 +8,7 @@
 #include "leveldb/env.h"
 #include "leveldb/table.h"
 #include "util/coding.h"
+#include <cstdio>
 
 namespace leveldb {
 
@@ -113,6 +114,21 @@ Status TableCache::Get(const ReadOptions& options,
   if (s.ok()) {
     Table* t = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
     s = t->InternalGet(options, k, arg, saver);
+    cache_->Release(handle);
+  }
+  return s;
+}
+
+Status TableCache::Sanitize(const ReadOptions& options,
+                       uint64_t file_number,
+                       uint64_t file_size,
+                       const Slice& k) {
+  Cache::Handle* handle = nullptr;
+  Status s = FindTable(file_number, file_size, &handle);
+  if (s.ok()) {
+    Table* t = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
+    // printf("Sanitizing File: %06llu\n", file_number);
+    s = t->Sanitize(options, k);
     cache_->Release(handle);
   }
   return s;

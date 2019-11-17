@@ -68,6 +68,8 @@ class LEVELDB_EXPORT Iterator {
   // the iterator.
   // REQUIRES: Valid()
   virtual Slice value() const = 0;
+  virtual uint32_t offset() const;
+
 
   // If an error has occurred, return it.  Else return an ok status.
   virtual Status status() const = 0;

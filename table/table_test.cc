@@ -129,6 +129,10 @@ class StringSource: public RandomAccessFile {
     *result = Slice(scratch, n);
     return Status::OK();
   }
+  virtual Status Write(uint64_t offset, size_t n, Slice* source) const {
+    printf("%s", "[table_test->StringSource] Write method is not implemented.");
+    return Status::OK();
+  }
 
  private:
   std::string contents_;

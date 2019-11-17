@@ -135,6 +135,10 @@ class Block::Iter : public Iterator {
     assert(Valid());
     return value_;
   }
+  uint32_t offset() const {
+    assert(Valid());
+    return current_;
+  }
 
   virtual void Next() {
     assert(Valid());

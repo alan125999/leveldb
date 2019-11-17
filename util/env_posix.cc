@@ -191,6 +191,34 @@ class PosixRandomAccessFile final : public RandomAccessFile {
     return status;
   }
 
+  Status Write(uint64_t offset, size_t n, Slice* source) const override {
+    // printf("%s", "Posix Env Writing.\n");
+    int fd = fd_;
+    if (!has_permanent_fd_) {
+      fd = ::open(filename_.c_str(), O_RDWR);
+      if (fd < 0) {
+        return PosixError(filename_, errno);
+      }
+    }
+
+    assert(fd != -1);
+
+    Status status;
+    // printf("pwrite(fd, source->data(), %zu, %llu)", n, offset);
+    ssize_t write_size = pwrite(fd, source->data(), n, static_cast<off_t>(offset));
+    if (write_size < 0) {
+      // An error: return a non-ok status.
+      status = PosixError(filename_, errno);
+    }
+    if (!has_permanent_fd_) {
+      // Close the temporary file descriptor opened earlier.
+      assert(fd != fd_);
+      ::close(fd);
+    }
+    return status;
+  }
+
+
  private:
   const bool has_permanent_fd_;  // If false, the file is opened on every read.
   const int fd_;  // -1 if has_permanent_fd_ is false.
@@ -230,6 +258,17 @@ class PosixMmapReadableFile final : public RandomAccessFile {
     }
 
     *result = Slice(mmap_base_ + offset, n);
+    return Status::OK();
+  }
+  Status Write(uint64_t offset, size_t n, Slice* source) const override {
+    // printf("%s", "mmap Writing.\n");
+    if (offset + n > length_) {
+      return PosixError(filename_, EINVAL);
+    }
+    // printf("Key: %s\n", mmap_base_ + 3);
+    // printf("Source: %s\n", source->data());
+    // printf("offset: %llu, n: %zu\n", offset, n);
+    memcpy(mmap_base_ + offset, source->data(), n);
     return Status::OK();
   }
 
@@ -504,7 +543,7 @@ class PosixEnv : public Env {
   Status NewRandomAccessFile(const std::string& filename,
                              RandomAccessFile** result) override {
     *result = nullptr;
-    int fd = ::open(filename.c_str(), O_RDONLY);
+    int fd = ::open(filename.c_str(), O_RDWR);
     if (fd < 0) {
       return PosixError(filename, errno);
     }
@@ -517,7 +556,7 @@ class PosixEnv : public Env {
     uint64_t file_size;
     Status status = GetFileSize(filename, &file_size);
     if (status.ok()) {
-      void* mmap_base = ::mmap(/*addr=*/nullptr, file_size, PROT_READ,
+      void* mmap_base = ::mmap(/*addr=*/nullptr, file_size, PROT_READ | PROT_WRITE,
                                MAP_SHARED, fd, 0);
       if (mmap_base != MAP_FAILED) {
         *result = new PosixMmapReadableFile(

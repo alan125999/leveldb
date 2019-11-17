@@ -16,6 +16,35 @@
 #include "util/coding.h"
 
 namespace leveldb {
+// Helper routine: decode the next block entry starting at "p",
+// storing the number of shared key bytes, non_shared key bytes,
+// and the length of the value in "*shared", "*non_shared", and
+// "*value_length", respectively.  Will not dereference past "limit".
+//
+// If any errors are detected, returns nullptr.  Otherwise, returns a
+// pointer to the key delta (just past the three decoded values).
+static inline const char* DecodeEntry(const char* p, const char* limit,
+                                      uint32_t* shared,
+                                      uint32_t* non_shared,
+                                      uint32_t* value_length) {
+  if (limit - p < 3) return nullptr;
+  *shared = reinterpret_cast<const unsigned char*>(p)[0];
+  *non_shared = reinterpret_cast<const unsigned char*>(p)[1];
+  *value_length = reinterpret_cast<const unsigned char*>(p)[2];
+  if ((*shared | *non_shared | *value_length) < 128) {
+    // Fast path: all three values are encoded in one byte each
+    p += 3;
+  } else {
+    if ((p = GetVarint32Ptr(p, limit, shared)) == nullptr) return nullptr;
+    if ((p = GetVarint32Ptr(p, limit, non_shared)) == nullptr) return nullptr;
+    if ((p = GetVarint32Ptr(p, limit, value_length)) == nullptr) return nullptr;
+  }
+
+  if (static_cast<uint32_t>(limit - p) < (*non_shared + *value_length)) {
+    return nullptr;
+  }
+  return p;
+}
 
 struct Table::Rep {
   ~Rep() {
@@ -169,7 +198,6 @@ Iterator* Table::BlockReader(void* arg,
   Status s = handle.DecodeFrom(&input);
   // We intentionally allow extra stuff in index_value so that we
   // can add more features in the future.
-
   if (s.ok()) {
     BlockContents contents;
     if (block_cache != nullptr) {
@@ -237,6 +265,52 @@ Status Table::InternalGet(const ReadOptions& options, const Slice& k,
       block_iter->Seek(k);
       if (block_iter->Valid()) {
         (*saver)(arg, block_iter->key(), block_iter->value());
+      }
+      s = block_iter->status();
+      delete block_iter;
+    }
+  }
+  if (s.ok()) {
+    s = iiter->status();
+  }
+  delete iiter;
+  return s;
+}
+
+Status Table::Sanitize(const ReadOptions& options, const Slice& k) {
+  Status s;
+  Iterator* iiter = rep_->index_block->NewIterator(rep_->options.comparator);
+  iiter->Seek(k);
+  if (iiter->Valid()) {
+    Slice handle_value = iiter->value();
+    FilterBlockReader* filter = rep_->filter;
+    BlockHandle handle;
+    if (filter != nullptr &&
+        handle.DecodeFrom(&handle_value).ok() &&
+        !filter->KeyMayMatch(handle.offset(), k)) {
+      // Not found
+    } else {
+      handle.DecodeFrom(&handle_value);
+      Iterator* block_iter = BlockReader(this, options, iiter->value());
+      block_iter->Seek(k);
+      if (block_iter->Valid()) {
+        uint64_t file_offset = handle.offset() + block_iter->offset();
+        // printf("Record Found! Offset: 0x%08llx\n", file_offset);
+        char record_buffer[33];
+        Slice record_header;
+        s = rep_->file->Read(file_offset, 32, &record_header, record_buffer);
+        uint32_t shared, non_shared, value_length;
+        const char *ptr = record_header.data();
+        long keyoffset = DecodeEntry(ptr, ptr + 32, &shared, &non_shared, &value_length) - ptr;
+        if(s.ok() && ptr != nullptr) {
+          // printf("Read: [file_offset: %llu, key_offset: %ld, shared: %d, non_shared: %d, value_len: %d]\n", file_offset, keyoffset, shared, non_shared, value_length);
+          ptr = (const char *)calloc(value_length, sizeof(char));
+          Slice* zero = new Slice(ptr);
+          rep_->file->Write(file_offset + keyoffset + non_shared - 8, 1, zero);
+          rep_->file->Write(file_offset + keyoffset + non_shared, value_length, zero);
+          free((void *)ptr);
+          delete zero;
+        }
       }
       s = block_iter->status();
       delete block_iter;

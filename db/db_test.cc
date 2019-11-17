@@ -218,6 +218,10 @@ class SpecialEnv : public EnvWrapper {
         counter_->Increment();
         return target_->Read(offset, n, result, scratch);
       }
+      virtual Status Write(uint64_t offset, size_t n, Slice* source) const {
+        printf("%s", "[db_test->CountingFile] Write method is not implemented.");
+        return Status::OK();
+      }
     };
 
     Status s = target()->NewRandomAccessFile(f, r);
@@ -351,6 +355,14 @@ class DBTest {
       result = s.ToString();
     }
     return result;
+  }
+
+  Status Sanitize(const std::string& k, const Snapshot* snapshot = nullptr) {
+    ReadOptions options;
+    options.snapshot = snapshot;
+    std::string result;
+    Status s = db_->Sanitize(options, k);
+    return s;
   }
 
   // Return a string that contains all key,value pairs in order,
@@ -2048,8 +2060,16 @@ class ModelDB: public DB {
   virtual Status Delete(const WriteOptions& o, const Slice& key) {
     return DB::Delete(o, key);
   }
+  virtual Status SecureDelete(const WriteOptions& o, const Slice& key) {
+    return DB::SecureDelete(o, key);
+  }
   virtual Status Get(const ReadOptions& options,
                      const Slice& key, std::string* value) {
+    assert(false);      // Not implemented
+    return Status::NotFound(key);
+  }
+  virtual Status Sanitize(const ReadOptions& options,
+                     const Slice& key) {
     assert(false);      // Not implemented
     return Status::NotFound(key);
   }
